@@ -1,58 +1,90 @@
-#!/usr//bin/env python3
+#!/usr/bin/env python3
 
-# 필요한 라이브러리를 가져옵니다.
-import time
-from ev3dev2.sensor import INPUT_1
-from ev3dev2.sensor.lego import UltrasonicSensor
-from ev3dev2.motor import LargeMotor, OUTPUT_B, SpeedPercent
+from ev3dev2.motor import LargeMotor, SpeedPercent
+from ev3dev2.sensor.lego import UltrasonicSensor, TouchSensor
+from time import sleep, time
 
-# --- 하드웨어 설정 ---
-# 1번 포트에 초음파 센서 연결
-us = UltrasonicSensor(INPUT_1)
+FINGER_MOTOR_1_PORT = 'outA'
+FINGER_MOTOR_2_PORT = 'outB'                     
+THUMB_MOTOR_PORT = 'outC'
+ULTRASONIC_SENSOR_PORT = 'in1'
+TOUCH_SENSOR_PORT = 'in2'
 
-# 2번 포트(B)에 모터 연결 (모터 포트는 A, B, C, D 중 하나입니다)
-# 사용하시는 모터가 '중간 모터'라면 LargeMotor를 MediumMotor로 바꿔주세요.
-lm = LargeMotor(OUTPUT_B)
+# 동작 설정 (변수는 여기서 유동적으로 조절하면 됩니다.)  
+GRASP_DEGREES = 60          # 손을 쥘 때의 각도
+GRASP_SPEED = 25            # 손을 쥘 때의 속도
+ULTRASONIC_DISTANCE_CM = 5  # 초음파 센서 감지 거리 (cm)
+ULTRASONIC_DURATION_S = 3  # 초음파 센서 감지 시간 (초)
+TOUCH_DURATION_S = 3        # 터치 센서 감지 시간 (초)
+# --------------------
 
-# --- 변수 설정 ---
-# 물체가 감지되기 시작한 시간을 기록할 변수 (처음에는 비워둠)
-detection_start_time = None
-# 모터 동작이 한번 실행되었는지 확인하는 변수
-action_triggered = False
+# --- 2. 하드웨어 준비 ---
+# 3개의 모터와 2개의 센서 객체를 생성
+finger_motor1 = LargeMotor(FINGER_MOTOR_1_PORT)
+finger_motor2 = LargeMotor(FINGER_MOTOR_2_PORT)
+thumb_motor = LargeMotor(THUMB_MOTOR_PORT)
+ultrasonic_sensor = UltrasonicSensor(ULTRASONIC_SENSOR_PORT)
+touch_sensor = TouchSensor(TOUCH_SENSOR_PORT)
+# --------------------
 
-print("프로그램 시작: 5cm 안에 물체를 2초 이상 두면 모터가 움직입니다.")
+# --- 3. 핵심 동작 함수 ---
+def grasp_hand():
+    """세 손가락을 동시에 쥐는 동작을 수행하는 함수"""
+    print(f"{GRASP_DEGREES}도 만큼 손을 쥡니다...")
+    # block=False를 이용해 세 모터가 동시에 움직이도록 명령합니다.
+    finger_motor1.on_for_degrees(SpeedPercent(GRASP_SPEED), GRASP_DEGREES, block=False)
+    finger_motor2.on_for_degrees(SpeedPercent(GRASP_SPEED), GRASP_DEGREES, block=False)
+    # 마지막 모터는 block=True로 설정하여 모든 움직임이 끝날 때까지 기다립니다.
+    thumb_motor.on_for_degrees(SpeedPercent(GRASP_SPEED), GRASP_DEGREES, block=True)
+    print("동작 완료.")
+# --------------------
 
-# 무한 루프를 돌면서 계속 센서 값을 확인합니다.
-while Tru
-    # 초음파 센서에서 거리를 cm 단위로 읽어옵니다.
-    distance = us.distance_centimeters
+# --- 4. 메인 프로그램 실행 ---
+print("로봇 핸드 프로그램을 시작합니다. (두 조건 중 하나를 만족하면 종료)")
 
-    # 1. 물체가 5cm보다 가까이 있는 경우
-    if distance < 5:
-        # 1-1. 물체가 '처음' 감지된 순간이라면
-        if detection_start_time is None:
-            # 현재 시간을 기록합니다.
-            detection_start_time = time.time()
-            print(f"물체 감지 시작! (거리: {distance:.1f} cm)")
+# 타이머 변수 초기화
+ultrasonic_start_time = None
+touch_start_time = None
 
-        # 1-2. 감지된 후 2초가 지났고, 아직 모터가 움직인 적이 없다면
-        if time.time() - detection_start_time > 2 and not action_triggered:
-            print("2초 이상 감지됨! 모터를 45도 회전합니다.")
+try:
+    # 무한 루프를 돌며 두 센서를 계속 확인합니다.
+    while True:
+        # --- 4-1. 초음파 센서 로직 ---
+        distance = ultrasonic_sensor.distance_centimeters
+        if distance < ULTRASONIC_DISTANCE_CM:
+            if ultrasonic_start_time is None:
+                ultrasonic_start_time = time()
+                print(f"물체 감지 (거리: {distance:.1f} cm)")
             
-            # 모터를 25% 속도로 45도 만큼 회전시킵니다.
-            lm.on_for_degrees(speed=SpeedPercent(25), degrees=45)
-            
-            # 모터 동작을 완료했으므로, 다시 움직이지 않도록 True로 변경합니다.
-            action_triggered = True
-            print("모터 작동 완료.")
+            if time() - ultrasonic_start_time > ULTRASONIC_DURATION_S:
+                print(f"초음파 센서 조건 만족 ({ULTRASONIC_DURATION_S}초 이상 감지).")
+                grasp_hand() # 손 쥐기 함수 호출
+                break        # 루프 탈출
+        else:
+            ultrasonic_start_time = None # 물체가 없으면 타이머 리셋
 
-    # 2. 물체가 5cm보다 멀리 있는 경우 (또는 사라진 경우)
-    else:
-        # 감지 시간을 초기화해서 타이머를 리셋합니다.
-        if detection_start_time is not None:
-             print("물체가 사라져서 타이머를 리셋합니다.")
-        detection_start_time = None
-        action_triggered = False
+        # --- 4-2. 터치 센서 로직 ---
+        if touch_sensor.is_pressed:
+            if touch_start_time is None:
+                touch_start_time = time()
+                print("터치 센서 감지")
 
-    # CPU가 너무 빠르게 작동하지 않도록 0.1초 쉽니다.
-    time.sleep(0.1)
+            if time() - touch_start_time > TOUCH_DURATION_S:
+                print(f"터치 센서 조건 만족 ({TOUCH_DURATION_S}초 이상 감지).")
+                grasp_hand() # 손 쥐기 함수 호출
+                break        # 루프 탈출
+        else:
+            touch_start_time = None # 손을 떼면 타이머 리셋
+
+        sleep(0.05) # 루프 대기
+
+except KeyboardInterrupt:
+    print("프로그램을 강제 종료합니다.")
+
+finally:
+    # 프로그램이 어떻게 끝나든 모터를 안전하게 정지시킵니다.      # 여기 파트는 코드 합칠 때 필요 없습니다.
+    print("프로그램을 종료합니다.")
+    finger_motor1.off()
+    finger_motor2.off()
+    thumb_motor.off()
+# --------------
