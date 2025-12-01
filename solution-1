@@ -1,0 +1,99 @@
+
+
+# --- 추가된 변수: 손을 펴고 나서 바로 다시 잡는 것을 방지하기 위함 ---
+just_released = False 
+# ----------------------------------------------------------------
+
+try:
+    while not buttons.backspace:
+        # [수정 포인트 1] 손바닥 센서가 떨어졌는지 확인 (물체를 뺐는지 확인)
+        # 손을 폈고(just_released), 손바닥 센서도 떨어졌다면 -> 다시 잡을 준비 완료
+        if just_released and not palm_touch_sensor.is_pressed:
+            just_released = False  
+            print("Ready to grasp again") # 디버깅용 (선택)
+
+        # --- 1. 잡기 동작 로직 (손이 열려 있고, 방금 놓은 상태가 아닐 때) ---
+        if hand_state == 'open' and not just_released:
+            
+            # 1-1. 초음파 센서로 잡기
+            distance = ultrasonic_sensor.distance_centimeters
+            if distance < ULTRASONIC_DISTANCE_CM:
+                if ultrasonic_start_time is None:
+                    ultrasonic_start_time = time()
+                if time() - ultrasonic_start_time > ULTRASONIC_DURATION_S:
+                    if grasp_hand():
+                        hand_state = 'closed'
+                        # 자이로 변수 초기화
+                        last_check_time = time()
+                        last_angle = gyro_sensor.angle
+                        rotation_direction = 0
+                        rotation_count = 0
+                    ultrasonic_start_time = None
+                    sleep(1)
+            else:
+                ultrasonic_start_time = None
+
+            # 1-2. 손바닥 터치 센서로 잡기
+            # (손바닥이 눌렸고 + 방금 놓은 상태가 아니라면 잡는다)
+            if palm_touch_sensor.is_pressed:
+                if grasp_hand():
+                    hand_state = 'closed'
+                    last_check_time = time()
+                    last_angle = gyro_sensor.angle
+                    rotation_direction = 0
+                    rotation_count = 0
+                sleep(1)
+
+        # --- 2. 놓기 동작 로직 (손이 닫혀 있을 때) ---
+        elif hand_state == 'closed': # else 대신 elif 사용 권장
+            current_time = time()
+            
+            # 2-1. 자이로 센서 로직 (기존과 동일)
+            if current_time - last_check_time >= ROTATION_TIME_INTERVAL:
+                # ... (자이로 로직 생략, 기존 코드 유지) ...
+                pass # (이 안의 내용은 기존 코드 그대로 두세요)
+
+            # 자이로로 놓기 조건 달성 시
+            if rotation_count >= ROTATION_COUNT_TARGET:
+                if release_hand():
+                    hand_state = 'open'
+                    just_released = True # [중요] 방금 놓았음을 표시
+                rotation_count = 0
+                rotation_direction = 0
+                gyro_sensor.reset()
+                sleep(2)
+
+        # --- 3. 손날 터치 센서 로직 
+        # 손날 버튼은 언제든 눌릴 수 있어야 하므로 위치는 여기가 맞습니다.
+        side_is_pressed = side_touch_sensor.is_pressed
+        
+        if side_is_pressed:
+            if side_touch_state == 'released':
+                side_touch_state = 'pressing'
+                side_touch_press_time = time()
+            elif side_touch_state == 'pressing':
+                if time() - side_touch_press_time >= 3:
+                    reset_motor_positions()
+                    side_touch_state = 'action_taken'
+                    hand_state = 'open' # 리셋 후 상태도 open으로
+                    just_released = True # 리셋 후 바로 잡지 않게 설정
+        else: # 손을 뗐을 때
+            if side_touch_state == 'pressing':
+                press_duration = time() - side_touch_press_time
+                
+                # [수정 포인트 2] 손이 닫혀있을 때 짧게 누르면 -> 놓기
+                if 0.1 < press_duration < 2.0 and hand_state == 'closed':
+                    print("Release by Side Sensor") 
+                    if release_hand():
+                        hand_state = 'open'
+                        just_released = True 
+                    
+                    rotation_count = 0
+                    rotation_direction = 0
+            side_touch_state = 'released'
+
+        sleep(0.05)
+
+except KeyboardInterrupt:
+    pass
+# ... (종료 처리) ...
