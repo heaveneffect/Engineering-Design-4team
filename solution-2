@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+######### 물체 빼기 전까지 코드가 멈추는 방식임.  (물체 빠지면 코드 다시 순서대로 진행)########
+# 필요한 라이브러리들을 가져옵니다.
+from ev3dev2.motor import LargeMotor, SpeedPercent
+from ev3dev2.sensor.lego import UltrasonicSensor, GyroSensor, TouchSensor
+from ev3dev2.button import Button 
+from time import sleep, time
+
+# --- 중요: 포트 설정 ---
+# 모든 센서 포트를 실제 로봇에 맞게 수정해주세요.
+FINGER_MOTOR_1_PORT = 'outA'
+FINGER_MOTOR_2_PORT = 'outB'
+THUMB_MOTOR_PORT = 'outC'
+ULTRASONIC_SENSOR_PORT = 'in1'
+PALM_TOUCH_SENSOR_PORT = 'in2' # 손바닥 터치 센서
+SIDE_TOUCH_SENSOR_PORT = 'in3' # 손날 터치 센서
+GYRO_SENSOR_PORT = 'in4'
+# --------------------
+
+# --- 동작 설정 ---
+GRASP_DEGREES = -400
+GRASP_SPEED = 15
+
+RELEASE_SPEED = 15
+THUMB_RELEASE_SP = 5
+
+ULTRASONIC_DISTANCE_CM = 5
+ULTRASONIC_DURATION_S = 2
+
+# 자이로 센서 놓기 동작을 위한 설정
+ROTATION_ANGLE_THRESHOLD = 90  # 회전 감지 각도
+ROTATION_TIME_INTERVAL = 1.0   # 각도 측정 시간 간격 (초)
+ROTATION_COUNT_TARGET = 2      # 목표 회전 횟수
+# -----------------
+
+# --- 하드웨어 준비 ---
+finger_motor1 = LargeMotor(FINGER_MOTOR_1_PORT)
+finger_motor2 = LargeMotor(FINGER_MOTOR_2_PORT)
+thumb_motor = LargeMotor(THUMB_MOTOR_PORT)
+ultrasonic_sensor = UltrasonicSensor(ULTRASONIC_SENSOR_PORT)
+palm_touch_sensor = TouchSensor(PALM_TOUCH_SENSOR_PORT)
+side_touch_sensor = TouchSensor(SIDE_TOUCH_SENSOR_PORT)
+gyro_sensor = GyroSensor(GYRO_SENSOR_PORT)
+buttons = Button() 
+# --------------------
+
+# --- 핵심 동작 함수들 ---
+def grasp_hand():
+    """손을 쥐고 성공 여부를 반환합니다."""
+    try:
+        finger_motor1.on_for_degrees(SpeedPercent(GRASP_SPEED), GRASP_DEGREES, block=False)
+        finger_motor2.on_for_degrees(SpeedPercent(GRASP_SPEED), GRASP_DEGREES, block=False)
+        thumb_motor.on_for_degrees(SpeedPercent(THUMB_RELEASE_SP), 200, block=True)
+        return True
+    except Exception:
+        return False
+
+def release_hand():
+    """손을 놓고 성공 여부를 반환합니다."""
+    try:
+        finger_motor1.on_to_position(SpeedPercent(RELEASE_SPEED), 0, block=False)
+        finger_motor2.on_to_position(SpeedPercent(RELEASE_SPEED), 0, block=False)
+        thumb_motor.on_to_position(SpeedPercent(RELEASE_SPEED), 0, block=True)
+        return True
+    except Exception:
+        return False
+
+def reset_motor_positions():
+    """현재 모터 위치를 새로운 0도로 설정합니다."""
+    finger_motor1.reset()
+    finger_motor2.reset()
+    thumb_motor.reset()
+# -------------------------
+
+# --- 메인 프로그램 실행 ---
+
+# 자이로 센서 초기화
+print("Initializing Gyro...")
+gyro_sensor.reset()
+sleep(2)
+print("Ready!")
+
+# --- 상태 및 타이머 변수 초기화 ---
+hand_state = 'open'
+ultrasonic_start_time = None
+
+# 자이로 센서 관련 변수
+last_check_time = time()
+last_angle = gyro_sensor.angle
+rotation_direction = 0  # 0: 중심, 1: +, -1: -
+rotation_count = 0
+
+side_touch_state = 'released'
+side_touch_press_time = 0
+# --------------------------------
+
+try:
+    while not buttons.backspace:
+        
+        # --- 1. 잡기 동작 로직 (손이 열려 있을 때) ---
+        if hand_state == 'open':
+            # 1-
