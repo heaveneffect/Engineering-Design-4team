@@ -1,29 +1,123 @@
+#!/usr/bin/env python3
+#### 물체를 손에서 뺄 때까지는 '다시 잡기' 기능을 잠시 꺼두는(Lock) 방식  #####
+# 필요한 라이브러리들을 가져옵니다.
+from ev3dev2.motor import LargeMotor, SpeedPercent
+from ev3dev2.sensor.lego import UltrasonicSensor, GyroSensor, TouchSensor
+from ev3dev2.button import Button 
+from time import sleep, time
 
+# --- 중요: 포트 설정 ---
+# 모든 센서 포트를 실제 로봇에 맞게 수정해주세요.
+FINGER_MOTOR_1_PORT = 'outA'
+FINGER_MOTOR_2_PORT = 'outB'
+THUMB_MOTOR_PORT = 'outC'
+ULTRASONIC_SENSOR_PORT = 'in1'
+PALM_TOUCH_SENSOR_PORT = 'in2' # 손바닥 터치 센서
+SIDE_TOUCH_SENSOR_PORT = 'in3' # 손날 터치 센서
+GYRO_SENSOR_PORT = 'in4'
+# --------------------
 
-# --- 추가된 변수: 손을 펴고 나서 바로 다시 잡는 것을 방지하기 위함 ---
-just_released = False 
-# ----------------------------------------------------------------
+# --- 동작 설정 ---
+GRASP_DEGREES = -400
+GRASP_SPEED = 15
+
+RELEASE_SPEED = 15
+THUMB_RELEASE_SP = 5
+
+ULTRASONIC_DISTANCE_CM = 5
+ULTRASONIC_DURATION_S = 2
+
+# 자이로 센서 놓기 동작을 위한 설정
+ROTATION_ANGLE_THRESHOLD = 90  # 회전 감지 각도
+ROTATION_TIME_INTERVAL = 1.0   # 각도 측정 시간 간격 (초)
+ROTATION_COUNT_TARGET = 2      # 목표 회전 횟수
+# -----------------
+
+# --- 하드웨어 준비 ---
+finger_motor1 = LargeMotor(FINGER_MOTOR_1_PORT)
+finger_motor2 = LargeMotor(FINGER_MOTOR_2_PORT)
+thumb_motor = LargeMotor(THUMB_MOTOR_PORT)
+ultrasonic_sensor = UltrasonicSensor(ULTRASONIC_SENSOR_PORT)
+palm_touch_sensor = TouchSensor(PALM_TOUCH_SENSOR_PORT)
+side_touch_sensor = TouchSensor(SIDE_TOUCH_SENSOR_PORT)
+gyro_sensor = GyroSensor(GYRO_SENSOR_PORT)
+buttons = Button() 
+# --------------------
+
+# --- 핵심 동작 함수들 ---
+def grasp_hand():
+    """손을 쥐고 성공 여부를 반환합니다."""
+    try:
+        finger_motor1.on_for_degrees(SpeedPercent(GRASP_SPEED), GRASP_DEGREES, block=False)
+        finger_motor2.on_for_degrees(SpeedPercent(GRASP_SPEED), GRASP_DEGREES, block=False)
+        thumb_motor.on_for_degrees(SpeedPercent(THUMB_RELEASE_SP), 200, block=True)
+        return True
+    except Exception:
+        return False
+
+def release_hand():
+    """손을 놓고 성공 여부를 반환합니다."""
+    try:
+        finger_motor1.on_to_position(SpeedPercent(RELEASE_SPEED), 0, block=False)
+        finger_motor2.on_to_position(SpeedPercent(RELEASE_SPEED), 0, block=False)
+        thumb_motor.on_to_position(SpeedPercent(RELEASE_SPEED), 0, block=True)
+        return True
+    except Exception:
+        return False
+
+def reset_motor_positions():
+    """현재 모터 위치를 새로운 0도로 설정합니다."""
+    finger_motor1.reset()
+    finger_motor2.reset()
+    thumb_motor.reset()
+# -------------------------
+
+# --- 메인 프로그램 실행 ---
+
+# 자이로 센서 초기화
+print("Initializing Gyro...")
+gyro_sensor.reset()
+sleep(2)
+print("System Ready!")
+
+# --- 상태 및 타이머 변수 초기화 ---
+hand_state = 'open'
+ultrasonic_start_time = None
+
+# [핵심 수정 1] 잡기 허용 플래그 변수 추가
+# True: 잡을 준비 됨 / False: 방금 놔서 아직 준비 안 됨
+ready_to_grasp = True 
+
+# 자이로 센서 관련 변수
+last_check_time = time()
+last_angle = gyro_sensor.angle
+rotation_direction = 0  
+rotation_count = 0
+
+side_touch_state = 'released'
+side_touch_press_time = 0
+# --------------------------------
 
 try:
     while not buttons.backspace:
-        # [수정 포인트 1] 손바닥 센서가 떨어졌는지 확인 (물체를 뺐는지 확인)
-        # 손을 폈고(just_released), 손바닥 센서도 떨어졌다면 -> 다시 잡을 준비 완료
-        if just_released and not palm_touch_sensor.is_pressed:
-            just_released = False  
-            print("Ready to grasp again") # 디버깅용 (선택)
+        
+        # [핵심 수정 2] 손바닥 센서 상태 업데이트
+        # 손바닥 센서가 눌려있지 않다면(물체가 없으면) -> 다시 잡을 준비 완료(True)
+        if not palm_touch_sensor.is_pressed:
+            ready_to_grasp = True
 
-        # --- 1. 잡기 동작 로직 (손이 열려 있고, 방금 놓은 상태가 아닐 때) ---
-        if hand_state == 'open' and not just_released:
-            
+        # --- 1. 잡기 동작 로직 (손이 열려 있을 때) ---
+        if hand_state == 'open':
             # 1-1. 초음파 센서로 잡기
             distance = ultrasonic_sensor.distance_centimeters
             if distance < ULTRASONIC_DISTANCE_CM:
                 if ultrasonic_start_time is None:
                     ultrasonic_start_time = time()
                 if time() - ultrasonic_start_time > ULTRASONIC_DURATION_S:
-                    if grasp_hand():
+                    # [조건 추가] ready_to_grasp가 True일 때만 잡음
+                    if ready_to_grasp and grasp_hand():
                         hand_state = 'closed'
-                        # 자이로 변수 초기화
+                        # 잡기 성공 후 자이로 관련 변수 초기화
                         last_check_time = time()
                         last_angle = gyro_sensor.angle
                         rotation_direction = 0
@@ -34,37 +128,59 @@ try:
                 ultrasonic_start_time = None
 
             # 1-2. 손바닥 터치 센서로 잡기
-            # (손바닥이 눌렸고 + 방금 놓은 상태가 아니라면 잡는다)
-            if palm_touch_sensor.is_pressed:
-                if grasp_hand():
-                    hand_state = 'closed'
-                    last_check_time = time()
-                    last_angle = gyro_sensor.angle
-                    rotation_direction = 0
-                    rotation_count = 0
-                sleep(1)
+            # [조건 추가] ready_to_grasp가 True일 때만 잡음
+            if hand_state == 'open' and palm_touch_sensor.is_pressed:
+                if ready_to_grasp: 
+                    if grasp_hand():
+                        hand_state = 'closed'
+                        last_check_time = time()
+                        last_angle = gyro_sensor.angle
+                        rotation_direction = 0
+                        rotation_count = 0
+                    sleep(1)
+                else:
+                    # 물체가 있지만 '잡지 마' 상태인 경우 (방금 손날 버튼으로 폈을 때)
+                    pass 
 
         # --- 2. 놓기 동작 로직 (손이 닫혀 있을 때) ---
-        elif hand_state == 'closed': # else 대신 elif 사용 권장
+        else: # hand_state == 'closed'
             current_time = time()
-            
-            # 2-1. 자이로 센서 로직 (기존과 동일)
+            # 2-1. 자이로 센서로 놓기 (1초 간격으로 체크)
             if current_time - last_check_time >= ROTATION_TIME_INTERVAL:
-                # ... (자이로 로직 생략, 기존 코드 유지) ...
-                pass # (이 안의 내용은 기존 코드 그대로 두세요)
+                current_angle = gyro_sensor.angle
+                angle_change = current_angle - last_angle
 
-            # 자이로로 놓기 조건 달성 시
+                # 회전 감지 로직
+                if rotation_direction == 0:
+                    if angle_change > ROTATION_ANGLE_THRESHOLD:
+                        rotation_direction = 1  
+                    elif angle_change < -ROTATION_ANGLE_THRESHOLD:
+                        rotation_direction = -1 
+                elif rotation_direction == 1:
+                    if angle_change < -ROTATION_ANGLE_THRESHOLD:
+                        rotation_count += 1
+                        rotation_direction = 0 
+                elif rotation_direction == -1:
+                    if angle_change > ROTATION_ANGLE_THRESHOLD:
+                        rotation_count += 1
+                        rotation_direction = 0 
+                
+                last_check_time = current_time
+                last_angle = current_angle
+
+            # 목표 회전 횟수 도달 시 손 놓기
             if rotation_count >= ROTATION_COUNT_TARGET:
                 if release_hand():
                     hand_state = 'open'
-                    just_released = True # [중요] 방금 놓았음을 표시
+                    # 자이로로 놓았을 때는 물체가 빠지면 바로 다시 잡을 수 있게 True 유지 (또는 취향에 따라 False)
+                    # 여기서는 자연스러운 동작을 위해 True 유지
+                
                 rotation_count = 0
                 rotation_direction = 0
                 gyro_sensor.reset()
-                sleep(2)
+                sleep(2) 
 
-        # --- 3. 손날 터치 센서 로직 
-        # 손날 버튼은 언제든 눌릴 수 있어야 하므로 위치는 여기가 맞습니다.
+        # --- 3. 손날 터치 센서 로직 (놓기/리셋) ---
         side_is_pressed = side_touch_sensor.is_pressed
         
         if side_is_pressed:
@@ -72,28 +188,38 @@ try:
                 side_touch_state = 'pressing'
                 side_touch_press_time = time()
             elif side_touch_state == 'pressing':
+                # 3초 이상 길게 누르면 리셋
                 if time() - side_touch_press_time >= 3:
+                    print("Resetting...")
                     reset_motor_positions()
                     side_touch_state = 'action_taken'
-                    hand_state = 'open' # 리셋 후 상태도 open으로
-                    just_released = True # 리셋 후 바로 잡지 않게 설정
-        else: # 손을 뗐을 때
+                    hand_state = 'open'
+                    ready_to_grasp = True # 리셋 후에는 잡기 허용
+        else: 
             if side_touch_state == 'pressing':
                 press_duration = time() - side_touch_press_time
                 
-                # [수정 포인트 2] 손이 닫혀있을 때 짧게 누르면 -> 놓기
+                # 짧은 클릭(0.1~2초) 시 놓기
                 if 0.1 < press_duration < 2.0 and hand_state == 'closed':
-                    print("Release by Side Sensor") 
+                    print("Released by Side Button")
                     if release_hand():
                         hand_state = 'open'
-                        just_released = True 
-                    
+                        
+                        # [핵심 수정 3] 강제로 폈을 때는, 물체를 뺄 때까지 다시 잡지 못하게 막음
+                        ready_to_grasp = False 
+                        print("Warning: Grasp disabled until object removed")
+
                     rotation_count = 0
                     rotation_direction = 0
+                    
             side_touch_state = 'released'
 
         sleep(0.05)
 
 except KeyboardInterrupt:
     pass
-# ... (종료 처리) ...
+
+finally:
+    finger_motor1.off()
+    finger_motor2.off()
+    thumb_motor.off()
